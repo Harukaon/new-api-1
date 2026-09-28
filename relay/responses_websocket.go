@@ -114,6 +114,9 @@ type responsesWSSession struct {
 	lockedKeyIndex  int
 	lockedContext   map[appconstant.ContextKey]any
 	lockedRoute     dto.AdvancedCustomRoute
+
+	// SparkAI fork: 用户请求的模型名，发给用户前把事件里的模型名改回它（见 responses_websocket_sparkai.go）
+	publicModel sparkaiPublicModel
 }
 
 func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn, runner ResponsesWSRequestRunner) *types.NewAPIError {
@@ -195,7 +198,7 @@ func (s *responsesWSSession) runRequest(state *responsesWSCallState, message []b
 		if outgoing != nil {
 			if err := s.client.SetWriteDeadline(time.Now().Add(responsesWSWriteTimeout)); err != nil {
 				state.closeAfter = true
-			} else if err := s.client.WriteMessage(outgoing.kind, outgoing.body); err != nil {
+			} else if err := s.client.WriteMessage(outgoing.kind, s.rewriteClientModel(outgoing.kind, outgoing.body)); err != nil {
 				state.closeAfter = true
 			}
 		}
@@ -256,6 +259,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		return apiErr
 	}
 	common.SetContextKey(c, appconstant.ContextKeyOriginalModel, modelName)
+	s.setPublicModel(modelName) // SparkAI fork
 	common.SetContextKey(c, appconstant.ContextKeyRequestStartTime, time.Now())
 	service.GetChannelConstraints(c).AddFilter(appdto.ChannelFilter{Kind: appdto.FilterRequestPath, RequestPath: c.Request.URL.Path})
 
@@ -705,7 +709,7 @@ func (s *responsesWSSession) writeClient(kind int, message []byte) error {
 	if err := s.client.SetWriteDeadline(time.Now().Add(responsesWSWriteTimeout)); err != nil {
 		return err
 	}
-	return s.client.WriteMessage(kind, message)
+	return s.client.WriteMessage(kind, s.rewriteClientModel(kind, message))
 }
 
 func (s *responsesWSSession) sendError(eventID, streamID string, apiErr *types.NewAPIError) {
