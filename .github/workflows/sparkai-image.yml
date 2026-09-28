@@ -1,0 +1,70 @@
+# SparkAI fork：每次推 sparkai 分支，先跑本分支改动的测试，再编译镜像推到 GHCR。
+# 只由 sparkai 分支触发；上游自带的流程只在推标签/手动时运行，本 fork 不推标签。
+name: SparkAI image
+
+on:
+  push:
+    branches: [sparkai]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: sparkai-image
+  cancel-in-progress: true
+
+env:
+  # 基于的上游版本，升级上游时一起改
+  BASE_VERSION: v1.0.0-rc.40
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 前端产物占位（go:embed 需要 web/dist 存在）
+        run: mkdir -p web/dist && touch web/dist/index.html
+      - name: SparkAI 改动的测试
+        run: |
+          go test ./common/ -run 'RewriteResponseModel|RewriteSSEModelLine' -count=1
+          go test ./middleware/ -run 'NonStream|GinJSON|Stream|Passthrough|WrittenReports|Claude' -count=1
+          go test ./relay/ -run 'ResponsesWS' -count=1
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 版本号和镜像名
+        run: |
+          SHORT=$(git rev-parse --short HEAD)
+          echo "${BASE_VERSION}-sparkai.${SHORT}" > VERSION
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "TAG=${BASE_VERSION#v}-sparkai-${SHORT}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.TAG }}
+            ${{ env.IMAGE }}:sparkai-latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: 输出镜像
+        run: echo "镜像 ${IMAGE}:${TAG}" >> "$GITHUB_STEP_SUMMARY"
