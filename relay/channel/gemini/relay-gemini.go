@@ -409,6 +409,8 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		}
 
 		service.ResetStatusCode(newAPIError, c.GetString("status_code_mapping"))
+		// SparkAI fork: 空响应这类上游侧错误不把 Gemini 相关文字给用户，和 Relay 主出口一致
+		newAPIError = service.ClientFacingError(newAPIError)
 
 		switch info.RelayFormat {
 		case types.RelayFormatClaude:

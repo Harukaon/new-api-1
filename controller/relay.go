@@ -90,6 +90,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError != nil {
 			service.RecordRequestPolicyTermination(c, newAPIError)
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
+			// SparkAI fork: 含有上游内容的错误换成统一的 503，原文只留在上面这行日志和后台错误日志里
+			newAPIError = service.ClientFacingError(newAPIError)
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
