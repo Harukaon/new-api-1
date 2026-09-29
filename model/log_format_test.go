@@ -35,6 +35,70 @@ func TestFormatUserLogsStripsQuotaSaturation(t *testing.T) {
 	require.Contains(t, parsed, "model_price")
 }
 
+// SparkAI fork: 用户看自己的错误日志时，上游错误的文字、错误码、状态码都不能露出；
+// 管理员视图、New API 自己产生的错误、上游返回的 400 保持原样。
+func TestFormatUserLogsHidesUpstreamErrorLogs(t *testing.T) {
+	errorLog := func(errType, errCode string, status int, content string) *Log {
+		return &Log{
+			Type:    LogTypeError,
+			Content: content,
+			Other: common.MapToJsonStr(map[string]any{
+				"error_type":   errType,
+				"error_code":   errCode,
+				"status_code":  status,
+				"request_path": "/v1/chat/completions",
+				"admin_info":   map[string]any{"use_channel": []string{"18"}},
+			}),
+		}
+	}
+	weeklyLimit := "status_code=429, You've reached your weekly usage limit. Your limit resets at 2026-10-05T00:00:00Z."
+
+	t.Run("user view of an upstream error", func(t *testing.T) {
+		logs := []*Log{errorLog("openai_error", "rate_limited", 429, weeklyLimit)}
+		formatUserLogs(logs, 0)
+
+		assert.Equal(t, "status_code=503, "+common.UpstreamErrorMaskMessage(), logs[0].Content)
+		parsed, err := common.StrToMap(logs[0].Other)
+		require.NoError(t, err)
+		assert.Equal(t, "new_api_error", parsed["error_type"])
+		assert.Equal(t, common.UpstreamErrorMaskCode, parsed["error_code"])
+		assert.Equal(t, float64(503), parsed["status_code"])
+		assert.Equal(t, "/v1/chat/completions", parsed["request_path"])
+		assert.NotContains(t, parsed, "admin_info")
+		assert.NotContains(t, logs[0].Other, "rate_limited")
+	})
+
+	t.Run("admin view keeps the full upstream text", func(t *testing.T) {
+		logs := []*Log{errorLog("openai_error", "rate_limited", 429, weeklyLimit)}
+		FormatAdminLogs(logs)
+
+		assert.Equal(t, weeklyLimit, logs[0].Content)
+		parsed, err := common.StrToMap(logs[0].Other)
+		require.NoError(t, err)
+		assert.Equal(t, "rate_limited", parsed["error_code"])
+		assert.Equal(t, float64(429), parsed["status_code"])
+	})
+
+	t.Run("errors that are shown as is", func(t *testing.T) {
+		own := errorLog("new_api_error", "invalid_request", 400, "status_code=400, invalid request: messages is required")
+		upstream400 := errorLog("openai_error", "invalid_request_error", 400, "status_code=400, unsupported parameter: foo")
+		// 老版本写的日志没有 error_type，无法判断来源，保持原样
+		legacy := &Log{Type: LogTypeError, Content: "status_code=500, old", Other: `{"request_path":"/v1/x"}`}
+		consume := &Log{Type: LogTypeConsume, Content: "model price 1", Other: `{"error_code":"rate_limited"}`}
+		logs := []*Log{own, upstream400, legacy, consume}
+		contents := []string{own.Content, upstream400.Content, legacy.Content, consume.Content}
+
+		formatUserLogs(logs, 0)
+
+		for i, entry := range logs {
+			assert.Equal(t, contents[i], entry.Content)
+		}
+		parsed, err := common.StrToMap(upstream400.Other)
+		require.NoError(t, err)
+		assert.Equal(t, "invalid_request_error", parsed["error_code"])
+	})
+}
+
 func TestTaskPluginLogVisibilityIsRoleSeparated(t *testing.T) {
 	other := common.MapToJsonStr(map[string]any{
 		"model_price": 1.25,
