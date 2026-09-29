@@ -31,9 +31,11 @@ jobs:
         run: mkdir -p web/dist && touch web/dist/index.html
       - name: SparkAI 改动的测试
         run: |
-          go test ./common/ -run 'RewriteResponseModel|RewriteSSEModelLine' -count=1
+          go test ./common/ -run 'RewriteResponseModel|RewriteSSEModelLine|ShouldMaskUpstreamError|MaskUpstreamErrorSSELine|UpstreamErrorMaskSettings' -count=1
           go test ./middleware/ -run 'NonStream|GinJSON|Stream|Passthrough|WrittenReports|Claude' -count=1
           go test ./relay/ -run 'ResponsesWS' -count=1
+          go test ./service/ -run 'ClientFacingError' -count=1
+          go test ./model/ -run 'FormatUserLogs' -count=1
 
   image:
     needs: test
