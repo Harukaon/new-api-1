@@ -228,10 +228,22 @@ func SendEmailVerification(c *gin.Context) {
 	}
 	code := common.GenerateVerificationCode(6)
 	common.RegisterVerificationCodeWithKey(email, code, common.EmailVerificationPurpose)
-	subject := fmt.Sprintf("%s邮箱验证邮件", common.SystemName)
-	content := fmt.Sprintf("<p>您好，你正在进行%s邮箱验证。</p>"+
-		"<p>您的验证码为: <strong>%s</strong></p>"+
-		"<p>验证码 %d 分钟内有效，如果不是本人操作，请忽略。</p>", common.SystemName, code, common.VerificationValidMinutes)
+	subject := fmt.Sprintf("%s邮箱验证码", common.SystemName)
+	content := fmt.Sprintf(`<!doctype html>
+<html><body style="margin:0;background:#fbf9f5;color:#16150f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">
+<div style="max-width:560px;margin:32px auto;padding:0 20px;">
+  <div style="padding:24px 0;border-bottom:1px solid #e7e2d9;font-size:24px;font-weight:700;letter-spacing:-.02em;">SparkAI</div>
+  <div style="margin-top:32px;padding:28px 24px;background:#fff;border:1px solid #e7e2d9;border-radius:12px;">
+    <h1 style="margin:0 0 18px;font-size:22px;">验证你的邮箱</h1>
+    <p style="margin:0 0 18px;line-height:1.7;">您好，你正在进行 %s 账户的邮箱验证。</p>
+    <div style="margin:24px 0;padding:18px;text-align:center;background:#f1efea;border-radius:8px;">
+      <div style="margin-bottom:8px;color:#777168;font-size:13px;">邮箱验证码</div>
+      <strong style="font-size:32px;letter-spacing:8px;">%s</strong>
+    </div>
+    <p style="margin:0;color:#777168;font-size:14px;line-height:1.7;">验证码 %d 分钟内有效。如果这不是你的操作，请忽略本邮件。</p>
+  </div>
+  <p style="margin:20px 0;color:#a09a90;font-size:12px;line-height:1.6;">此邮件由 SparkAI 自动发送，请勿直接回复。</p>
+</div></body></html>`, common.SystemName, code, common.VerificationValidMinutes)
 	err = common.SendEmail(subject, email, content)
 	if err != nil {
 		common.ApiError(c, err)
@@ -255,10 +267,19 @@ func SendPasswordResetEmail(c *gin.Context) {
 		common.RegisterVerificationCodeWithKey(email, code, common.PasswordResetPurpose)
 		link := fmt.Sprintf("%s/user/reset?email=%s&token=%s", system_setting.ServerAddress, email, code)
 		subject := fmt.Sprintf("%s密码重置", common.SystemName)
-		content := fmt.Sprintf("<p>您好，你正在进行%s密码重置。</p>"+
-			"<p>点击 <a href='%s'>此处</a> 进行密码重置。</p>"+
-			"<p>如果链接无法点击，请尝试点击下面的链接或将其复制到浏览器中打开：<br> %s </p>"+
-			"<p>重置链接 %d 分钟内有效，如果不是本人操作，请忽略。</p>", common.SystemName, link, link, common.VerificationValidMinutes)
+		content := fmt.Sprintf(`<!doctype html>
+<html><body style="margin:0;background:#fbf9f5;color:#16150f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">
+<div style="max-width:560px;margin:32px auto;padding:0 20px;">
+  <div style="padding:24px 0;border-bottom:1px solid #e7e2d9;font-size:24px;font-weight:700;letter-spacing:-.02em;">SparkAI</div>
+  <div style="margin-top:32px;padding:28px 24px;background:#fff;border:1px solid #e7e2d9;border-radius:12px;">
+    <h1 style="margin:0 0 18px;font-size:22px;">重置账户密码</h1>
+    <p style="margin:0 0 22px;line-height:1.7;">您好，你正在请求重置 %s 账户的密码。</p>
+    <p style="margin:0 0 22px;line-height:1.7;"><a href="%s" style="display:inline-block;padding:12px 20px;border-radius:7px;background:#16150f;color:#fff;text-decoration:none;font-weight:600;">重置密码</a></p>
+    <p style="margin:0;color:#777168;font-size:14px;line-height:1.7;">如果按钮无法点击，请复制下面的链接到浏览器打开：<br><span style="word-break:break-all;color:#777168;">%s</span></p>
+    <p style="margin:18px 0 0;color:#777168;font-size:14px;line-height:1.7;">链接 %d 分钟内有效。如果这不是你的操作，请忽略本邮件。</p>
+  </div>
+  <p style="margin:20px 0;color:#a09a90;font-size:12px;line-height:1.6;">此邮件由 SparkAI 自动发送，请勿直接回复。</p>
+</div></body></html>`, common.SystemName, link, link, common.VerificationValidMinutes)
 		err := common.SendEmail(subject, email, content)
 		if err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("failed to send password reset email to %s: %s", email, err.Error()))
