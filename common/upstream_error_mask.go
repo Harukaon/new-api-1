@@ -1,6 +1,8 @@
 package common
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strconv"
@@ -83,4 +85,42 @@ func ShouldMaskUpstreamError(errType, errCode string, status int) bool {
 		}
 	}
 	return true
+}
+
+// MaskUpstreamErrorSSELine 处理流式响应里的一行（不含换行符）。
+//
+// 流式响应一旦开始，状态码就已经是 200，上游中途插入的错误事件（比如订阅额度在生成到一半时
+// 用完）没法再改成 503，只能把文字换掉：data 行的 JSON 带非空的顶层 "error"，或者 type 是
+// "error"（Anthropic / Responses 的错误事件）时，整行换成统一错误。其它行一字节不动。
+// New API 自己不会往流里发错误事件，所以这里不用像非流式那样区分来源。
+func MaskUpstreamErrorSSELine(line []byte) (out []byte, changed bool) {
+	payload, ok := bytes.CutPrefix(line, []byte("data:"))
+	if !ok || !bytes.Contains(payload, []byte(`"error"`)) || !UpstreamErrorMaskEnabled() {
+		return line, false
+	}
+	var event map[string]json.RawMessage
+	if err := Unmarshal(bytes.TrimSpace(payload), &event); err != nil {
+		return line, false
+	}
+	var eventType string
+	_ = Unmarshal(event["type"], &eventType)
+	errorField := bytes.TrimSpace(event["error"])
+	hasError := len(errorField) > 0 && !bytes.Equal(errorField, []byte("null"))
+	if !hasError && eventType != "error" {
+		return line, false
+	}
+
+	message := UpstreamErrorMaskMessage()
+	masked := map[string]any{"error": map[string]any{"message": message, "type": NewAPIErrorTypeName, "code": UpstreamErrorMaskCode}}
+	if eventType == "error" {
+		// Anthropic 的错误在 error 里，Responses 的 message / code 在顶层，两边都带上
+		masked["type"] = "error"
+		masked["message"] = message
+		masked["code"] = UpstreamErrorMaskCode
+	}
+	raw, err := Marshal(masked)
+	if err != nil {
+		return line, false
+	}
+	return append([]byte("data: "), raw...), true
 }

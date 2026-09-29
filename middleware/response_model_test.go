@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 )
 
 const requested = "deepseek-v4.1"
@@ -109,6 +110,28 @@ func TestStreamViaHelpersAndSplitChunks(t *testing.T) {
 	if rec.Header().Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("content-type = %q", rec.Header().Get("Content-Type"))
 	}
+}
+
+// 流式响应开始后上游才插入的错误事件（比如订阅额度生成到一半用完）不能把原文转给用户；
+// 正常的数据行、[DONE] 不受影响，错误事件即使被切成两段写出也能整行换掉。
+func TestStreamMasksUpstreamErrorEvents(t *testing.T) {
+	weekly := "You've reached your weekly usage limit. Your limit resets at 2026-10-05T00:00:00Z."
+	engine := newEngine(requested, func(c *gin.Context) {
+		helper.SetEventStreamHeaders(c)
+		_ = helper.StringData(c, `{"id":"1","model":"deepseek-v4.1","choices":[{"delta":{"content":"hi"}}]}`)
+		_, _ = c.Writer.Write([]byte(`data: {"error":{"message":"` + weekly[:20]))
+		c.Writer.Flush()
+		_, _ = c.Writer.Write([]byte(weekly[20:] + `","type":"rate_limit_error","code":"rate_limited"}}` + "\n\n"))
+		_ = helper.StringData(c, "[DONE]")
+	})
+
+	body := serve(engine).Body.String()
+
+	assert.NotContains(t, body, "weekly")
+	assert.NotContains(t, body, "rate_limited")
+	assert.Contains(t, body, `data: {"id":"1","model":"deepseek-v4.1","choices":[{"delta":{"content":"hi"}}]}`)
+	assert.Contains(t, body, `"code":"service_unavailable"`)
+	assert.Contains(t, body, "data: [DONE]")
 }
 
 func TestClaudeStreamEvents(t *testing.T) {

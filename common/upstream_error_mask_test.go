@@ -1,11 +1,13 @@
 package common
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestShouldMaskUpstreamError(t *testing.T) {
@@ -59,6 +61,72 @@ func TestShouldMaskUpstreamError(t *testing.T) {
 			assert.Equal(t, tc.want, ShouldMaskUpstreamError(tc.errType, tc.errCode, tc.status))
 		})
 	}
+}
+
+// 流式响应开始后上游才插入的错误事件：状态码改不了，只能把整行换成统一错误；其它行一字节不动。
+func TestMaskUpstreamErrorSSELine(t *testing.T) {
+	weekly := "You've reached your weekly usage limit. Your limit resets at 2026-10-05T00:00:00Z."
+
+	masked := map[string]string{
+		"openai style error object":   `data: {"error":{"message":"` + weekly + `","type":"rate_limit_error","code":"rate_limited"}}`,
+		"error given as plain string": `data: {"error":"` + weekly + `"}`,
+		"anthropic style error event": `data: {"type":"error","error":{"type":"overloaded_error","message":"` + weekly + `"}}`,
+		"responses style error event": `data: {"type":"error","code":"rate_limit_exceeded","message":"` + weekly + `","param":null}`,
+		"no space after data colon":   `data:{"error":{"message":"` + weekly + `"}}`,
+	}
+	for name, line := range masked {
+		t.Run(name, func(t *testing.T) {
+			out, changed := MaskUpstreamErrorSSELine([]byte(line))
+
+			require.True(t, changed)
+			assert.NotContains(t, string(out), "weekly")
+			assert.NotContains(t, string(out), "rate_limit")
+			var event struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+				Error   struct {
+					Message string `json:"message"`
+					Code    string `json:"code"`
+				} `json:"error"`
+			}
+			require.True(t, strings.HasPrefix(string(out), "data: "))
+			require.NoError(t, UnmarshalJsonStr(strings.TrimPrefix(string(out), "data: "), &event))
+			assert.Equal(t, UpstreamErrorMaskMessage(), event.Error.Message)
+			assert.Equal(t, UpstreamErrorMaskCode, event.Error.Code)
+			if strings.Contains(line, `"type":"error"`) {
+				assert.Equal(t, "error", event.Type)
+				assert.Equal(t, UpstreamErrorMaskMessage(), event.Message)
+			}
+		})
+	}
+
+	unchanged := map[string]string{
+		"normal chunk":                   `data: {"id":"1","choices":[{"delta":{"content":"hello"}}]}`,
+		"model text that mentions error": `data: {"choices":[{"delta":{"content":"an \"error\" occurred"}}]}`,
+		"null error field":               `data: {"error":null,"choices":[]}`,
+		"nested error field only":        `data: {"usage":{"error":"x"},"choices":[]}`,
+		"done marker":                    `data: [DONE]`,
+		"payload that is not json":       `data: not json "error"`,
+		"comment line":                   `: PING`,
+		"event name line":                `event: error`,
+		"empty line":                     ``,
+	}
+	for name, line := range unchanged {
+		t.Run(name, func(t *testing.T) {
+			out, changed := MaskUpstreamErrorSSELine([]byte(line))
+
+			assert.False(t, changed)
+			assert.Equal(t, line, string(out))
+		})
+	}
+
+	t.Run("kill switch", func(t *testing.T) {
+		t.Setenv("UPSTREAM_ERROR_MASK_ENABLED", "false")
+		out, changed := MaskUpstreamErrorSSELine([]byte(masked["openai style error object"]))
+
+		assert.False(t, changed)
+		assert.Equal(t, masked["openai style error object"], string(out))
+	})
 }
 
 func TestUpstreamErrorMaskSettings(t *testing.T) {

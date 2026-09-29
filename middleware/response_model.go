@@ -179,6 +179,8 @@ func rewriteSSELines(chunk []byte, model string) []byte {
 			line = line[:len(line)-1]
 		}
 		rewritten, _ := common.RewriteSSEModelLine(line, model)
+		// 流式中途上游插入的错误事件：整行换成统一错误，不把原文给用户（见 common/upstream_error_mask.go）
+		rewritten, _ = common.MaskUpstreamErrorSSELine(rewritten)
 		out.Write(rewritten)
 		if carriage {
 			out.WriteByte('\r')
